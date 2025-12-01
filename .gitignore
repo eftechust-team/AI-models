@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Flask
+instance/
+.webassets-cache
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.stl
+*.tmp
+temp_*
+
+# Environment variables and secrets
+.env
+*.key
+*.pem
+
+# User data and saved models
+saved_models/
+*.db
+*.json
+!package.json
+!package-lock.json
+
+# Test files with API keys
+test_replicate.py
+test_ai_simple.py
+test_openai_direct.py
+diagnose_ai.py
+SETUP_API_KEY.md
+

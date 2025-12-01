@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text to 2D STL Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎨 AI Text to 3D STL Generator</h1>
+            <p class="subtitle">Describe any shape using AI, and we'll generate a 3D STL file for you!</p>
+        </header>
+
+        <main>
+            <div class="input-section">
+                <div class="form-group">
+                    <label>Input Method</label>
+                    <div class="mode-selector">
+                        <label class="mode-option">
+                            <input type="radio" name="inputMode" value="ai" checked>
+                            <span>AI Generate Image</span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="inputMode" value="upload">
+                            <span>Upload Image</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="aiInputSection" class="input-mode-section">
+                    <div class="form-group">
+                        <label for="textInput">Shape Description (AI-Powered)</label>
+                        <textarea 
+                            id="textInput" 
+                            placeholder="e.g., 'a cat', 'a steak', 'a flower', 'a heart', 'a star', 'a circle' - AI will generate the shape!"
+                            rows="3"
+                        ></textarea>
+                        <small class="help-text">Powered by AI - describe any shape or object!</small>
+                    </div>
+                </div>
+
+                <div id="uploadInputSection" class="input-mode-section hidden">
+                    <div class="form-group">
+                        <label for="imageUpload">Upload Image</label>
+                        <input 
+                            type="file" 
+                            id="imageUpload" 
+                            accept="image/*"
+                            class="file-input"
+                        >
+                        <small class="help-text">Upload a 2D image (PNG, JPG, etc.)</small>
+                        <div id="uploadPreview" class="upload-preview hidden">
+                            <img id="uploadPreviewImage" src="" alt="Uploaded image preview">
+                            <button type="button" id="clearUploadBtn" class="btn-clear">Clear</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="uploadDescription">What to Extract (Optional)</label>
+                        <textarea 
+                            id="uploadDescription" 
+                            placeholder="e.g., 'the cat', 'the person', 'the car', 'the tree' - describe what object/shape you want to extract from the image. Leave empty to process the entire image."
+                            rows="2"
+                        ></textarea>
+                        <small class="help-text">Describe the object you want to extract. The system will identify and extract it from the uploaded image.</small>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="thicknessInput">Thickness (mm)</label>
+                    <input 
+                        type="number" 
+                        id="thicknessInput" 
+                        min="0.1" 
+                        max="100" 
+                        step="0.1" 
+                        value="10.0"
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label>STL Fill Option</label>
+                    <div class="fill-option-group">
+                        <label class="fill-option">
+                            <input type="radio" name="fillOption" value="solid" checked>
+                            <span>Solid Infill (fills all holes)</span>
+                        </label>
+                        <label class="fill-option">
+                            <input type="radio" name="fillOption" value="holes">
+                            <span>Keep Holes (preserves holes in shape)</span>
+                        </label>
+                    </div>
+                    <small class="help-text">Choose whether to fill holes or preserve them in the 3D model</small>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="arcTopCheckbox">
+                        <span>Arc Top (gradually decreasing layer size for curved top)</span>
+                    </label>
+                    <small class="help-text">Creates a dome/arch-shaped top surface instead of flat</small>
+                </div>
+
+                <button id="generateBtn" class="btn-primary">
+                    Generate STL
+                </button>
+            </div>
+
+            <div id="progressSection" class="progress-section hidden">
+                <div class="progress-bar-container">
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <div id="progressText" class="progress-text">0%</div>
+                </div>
+                <p id="progressMessage" class="progress-message">Initializing...</p>
+                <p id="aiStatus" class="ai-status hidden"></p>
+            </div>
+
+
+            <div id="imageSelectionSection" class="image-selection-section hidden">
+                <h2>Select an Image to Generate STL</h2>
+                <div id="imageGrid" class="image-grid">
+                    <!-- Images will be inserted here -->
+                </div>
+            </div>
+
+            <div id="previewSection" class="preview-section hidden">
+                <h2>Preview</h2>
+                <div class="drawing-controls">
+                    <div class="drawing-tools">
+                        <button id="blackPenBtn" class="pen-btn active" data-color="black">
+                            <span class="pen-icon black-pen">●</span> Black Pen
+                        </button>
+                        <button id="whitePenBtn" class="pen-btn" data-color="white">
+                            <span class="pen-icon white-pen">●</span> White Pen
+                        </button>
+                        <label class="brush-size-label">
+                            Brush Size:
+                            <input type="range" id="brushSize" min="1" max="50" value="10" class="brush-slider">
+                            <span id="brushSizeValue">10</span>
+                        </label>
+                        <div class="undo-redo-group">
+                            <button id="undoBtn" class="btn-undo" title="Undo">↶ Undo</button>
+                            <button id="redoBtn" class="btn-undo" title="Redo">↷ Redo</button>
+                        </div>
+                        <button id="clearDrawingBtn" class="btn-clear-small">Clear</button>
+                    </div>
+                </div>
+                <div class="preview-container">
+                    <canvas id="previewCanvas" width="512" height="512"></canvas>
+                    <img id="previewImage" src="" alt="2D Shape Preview" style="display: none;">
+                </div>
+                <div class="preview-actions">
+                    <button id="applyDrawingBtn" class="btn-apply hidden">
+                        Apply Drawing
+                    </button>
+                    <button id="reverseBtn" class="btn-reverse hidden">
+                        Reverse Selection
+                    </button>
+                    <button id="saveModelBtn" class="btn-primary hidden">
+                        💾 Save Model
+                    </button>
+                    <button id="downloadBtn" class="btn-secondary hidden">
+                        Download STL File
+                    </button>
+                </div>
+            </div>
+
+            <div id="errorSection" class="error-section hidden">
+                <p id="errorMessage"></p>
+            </div>
+
+            <div id="savedModelsSection" class="saved-models-section">
+                <div class="saved-models-header">
+                    <h2>💾 Saved Models</h2>
+                    <button id="refreshModelsBtn" class="btn-secondary">Refresh</button>
+                </div>
+                <div id="savedModelsGrid" class="saved-models-grid">
+                    <!-- Saved models will be inserted here -->
+                </div>
+                <div id="noModelsMessage" class="no-models-message hidden">
+                    <p>No saved models yet. Generate and save a model to see it here!</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Save Model Modal -->
+    <div id="saveModelModal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Save Model</h3>
+            <div class="form-group">
+                <label for="modelNameInput">Model Name</label>
+                <input type="text" id="modelNameInput" placeholder="Enter model name" value="">
+            </div>
+            <div class="form-group">
+                <label for="modelDescriptionInput">Description (Optional)</label>
+                <textarea id="modelDescriptionInput" placeholder="Add a description..." rows="2"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button id="confirmSaveBtn" class="btn-primary">Save</button>
+                <button id="cancelSaveBtn" class="btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
+
