@@ -102,6 +102,14 @@
                     <small class="help-text">Creates a dome/arch-shaped top surface instead of flat</small>
                 </div>
 
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="multiLayerCheckbox">
+                        <span>Multi-Layer Mode (generate separate STL for each component/color)</span>
+                    </label>
+                    <small class="help-text">AI analyzes different colors/patterns and creates separate STL files for each component that can be assembled</small>
+                </div>
+
                 <button id="generateBtn" class="btn-primary">
                     Generate STL
                 </button>
@@ -165,6 +173,51 @@
                     <button id="downloadBtn" class="btn-secondary hidden">
                         Download STL File
                     </button>
+                    <button id="downloadAllLayersBtn" class="btn-secondary hidden">
+                        📦 Download All Layers (ZIP)
+                    </button>
+                    <button id="generateGcodeBtn" class="btn-secondary hidden">
+                        🖨️ Generate G-code
+                    </button>
+                    <button id="downloadGcodeBtn" class="btn-secondary hidden">
+                        📥 Download G-code
+                    </button>
+                </div>
+                <div id="layersList" class="layers-list hidden">
+                    <h3>Generated Layers:</h3>
+                    <div id="layersContainer" class="layers-container">
+                        <!-- Layer download buttons will be inserted here -->
+                    </div>
+                </div>
+            </div>
+
+            <div id="gcodeSection" class="gcode-section hidden">
+                <h2>G-code Settings</h2>
+                <div class="gcode-controls">
+                    <div class="form-group">
+                        <label>Learn from G-code File</label>
+                        <input type="file" id="gcodeLearnFile" accept=".gcode,.txt" class="file-input">
+                        <button id="learnGcodeBtn" class="btn-secondary">Learn Settings</button>
+                        <small class="help-text">Upload a G-code file to extract printer and printing settings</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Current Settings</label>
+                        <button id="viewSettingsBtn" class="btn-secondary">View/Edit Settings</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- G-code Settings Modal -->
+            <div id="gcodeSettingsModal" class="modal hidden">
+                <div class="modal-content" style="max-width: 800px; max-height: 90vh; overflow-y: auto;">
+                    <h3>G-code Settings</h3>
+                    <div id="gcodeSettingsForm" class="gcode-settings-form">
+                        <!-- Settings will be dynamically generated here -->
+                    </div>
+                    <div class="modal-actions">
+                        <button id="saveGcodeSettingsBtn" class="btn-primary">Save Settings</button>
+                        <button id="cancelGcodeSettingsBtn" class="btn-secondary">Cancel</button>
+                    </div>
                 </div>
             </div>
 

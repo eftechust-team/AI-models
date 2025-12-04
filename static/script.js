@@ -48,6 +48,8 @@ const cancelSaveBtn = document.getElementById('cancelSaveBtn');
 // Store current model data for saving
 let currentStlPath = null;
 let currentPreviewImage = null;
+let currentStlPaths = null; // Store current STL paths for multi-layer mode
+let currentLayerInfo = null; // Store current layer info for multi-layer mode
 
 // Store current image data for reversal
 let currentImageBase64 = null;
@@ -72,6 +74,12 @@ function getSolidInfill() {
 function getArcTop() {
     const arcTopCheckbox = document.getElementById('arcTopCheckbox');
     return arcTopCheckbox ? arcTopCheckbox.checked : false; // Default to false
+}
+
+// Helper function to get multi_layer option
+function getMultiLayer() {
+    const multiLayerCheckbox = document.getElementById('multiLayerCheckbox');
+    return multiLayerCheckbox ? multiLayerCheckbox.checked : false; // Default to false
 }
 
 // Event listeners
@@ -218,7 +226,8 @@ function handleUploadGenerate() {
                 description: description,
                 thickness: thickness,
                 solid_infill: getSolidInfill(),
-                arc_top: getArcTop()
+                arc_top: getArcTop(),
+                multi_layer: getMultiLayer()
             })
         })
         .then(response => response.json())
@@ -246,14 +255,8 @@ function handleUploadGenerate() {
                     previewSection.classList.remove('hidden');
                 }
                 
-                // Store STL path for download
-                downloadBtn.dataset.stlPath = data.stl_path;
-                currentStlPath = data.stl_path;
-                currentPreviewImage = data.preview_image;
-                downloadBtn.classList.remove('hidden');
-                if (saveModelBtn) saveModelBtn.classList.remove('hidden');
-                reverseBtn.classList.remove('hidden');
-                updateReverseButtonText();
+                // Handle STL response (single or multi-layer)
+                handleStlResponse(data);
                 
                 // Hide progress and show preview
                 hideProgress();
@@ -439,7 +442,8 @@ function generateStlFromImage(imageBase64, thickness) {
                 image: imageBase64,
                 thickness: thickness,
                 solid_infill: getSolidInfill(),
-                arc_top: getArcTop()
+                arc_top: getArcTop(),
+                multi_layer: getMultiLayer()
             })
     })
     .then(response => response.json())
@@ -466,12 +470,8 @@ function generateStlFromImage(imageBase64, thickness) {
             }
             
             // Store STL path for download
-            downloadBtn.dataset.stlPath = data.stl_path;
-            currentStlPath = data.stl_path;
-            if (data.preview_image) currentPreviewImage = data.preview_image;
-            
-            // Show reverse button and save button
-            reverseBtn.classList.remove('hidden');
+            // Handle STL response (single or multi-layer)
+            handleStlResponse(data);
             if (saveModelBtn) saveModelBtn.classList.remove('hidden');
             updateReverseButtonText();
             
@@ -609,11 +609,8 @@ function handleReverse() {
                 }
                 
                 // Store STL path for download
-                downloadBtn.dataset.stlPath = data.stl_path;
-                currentStlPath = data.stl_path;
-                if (data.preview_image) currentPreviewImage = data.preview_image;
-                downloadBtn.classList.remove('hidden');
-                if (saveModelBtn) saveModelBtn.classList.remove('hidden');
+                // Handle STL response (single or multi-layer)
+                handleStlResponse(data);
                 
                 // Update button text and re-enable button
                 updateReverseButtonText();
@@ -651,7 +648,8 @@ function handleReverse() {
                 image: currentImageBase64,
                 thickness: thickness,
                 solid_infill: getSolidInfill(),
-                arc_top: getArcTop()
+                arc_top: getArcTop(),
+                multi_layer: getMultiLayer()
             })
         })
         .then(response => response.json())
@@ -676,11 +674,8 @@ function handleReverse() {
                 }
                 
                 // Store STL path for download
-                downloadBtn.dataset.stlPath = data.stl_path;
-                currentStlPath = data.stl_path;
-                if (data.preview_image) currentPreviewImage = data.preview_image;
-                downloadBtn.classList.remove('hidden');
-                if (saveModelBtn) saveModelBtn.classList.remove('hidden');
+                // Handle STL response (single or multi-layer)
+                handleStlResponse(data);
                 
                 // Update button text and re-enable button
                 updateReverseButtonText();
@@ -1199,9 +1194,489 @@ if (cancelSaveBtn) {
     cancelSaveBtn.addEventListener('click', hideSaveModelModal);
 }
 
-// Load saved models on page load
+// Helper function to handle STL response (single or multi-layer)
+function handleStlResponse(data) {
+    // Show G-code controls when STL is ready
+    showGcodeControls();
+    if (data.multi_layer && data.stl_paths) {
+        // Multi-layer mode
+        currentStlPaths = data.stl_paths; // Store paths globally
+        currentLayerInfo = data.layer_info || []; // Store layer info globally
+        displayLayers(data.stl_paths, currentLayerInfo);
+        currentStlPath = data.stl_paths[0]; // Store first for save
+        currentPreviewImage = data.preview_image;
+        downloadBtn.classList.add('hidden');
+        const downloadAllBtn = document.getElementById('downloadAllLayersBtn');
+        if (downloadAllBtn) downloadAllBtn.classList.remove('hidden');
+    } else {
+        // Single STL mode
+        currentStlPaths = null; // Clear multi-layer data
+        currentLayerInfo = null;
+        downloadBtn.dataset.stlPath = data.stl_path;
+        currentStlPath = data.stl_path;
+        currentPreviewImage = data.preview_image;
+        downloadBtn.classList.remove('hidden');
+        const downloadAllBtn = document.getElementById('downloadAllLayersBtn');
+        if (downloadAllBtn) downloadAllBtn.classList.add('hidden');
+        const layersList = document.getElementById('layersList');
+        if (layersList) layersList.classList.add('hidden');
+    }
+    if (saveModelBtn) saveModelBtn.classList.remove('hidden');
+    reverseBtn.classList.remove('hidden');
+    updateReverseButtonText();
+}
+
+// Multi-layer STL functions
+function displayLayers(stlPaths, layerInfo) {
+    const layersList = document.getElementById('layersList');
+    const layersContainer = document.getElementById('layersContainer');
+    
+    if (!layersList || !layersContainer) return;
+    
+    layersContainer.innerHTML = '';
+    
+    stlPaths.forEach((stlPath, index) => {
+        const layerName = layerInfo[index]?.name || `Layer_${index + 1}`;
+        const layerDiv = document.createElement('div');
+        layerDiv.className = 'layer-item';
+        // Escape quotes in layer name and path for onclick
+        const safeLayerName = layerName.replace(/'/g, "\\'");
+        const safeStlPath = stlPath.replace(/'/g, "\\'");
+        layerDiv.innerHTML = `
+            <span class="layer-name">${safeLayerName}</span>
+            <button class="btn-download-layer" onclick="downloadLayer('${safeStlPath}', '${safeLayerName}')">
+                📥 Download
+            </button>
+        `;
+        layersContainer.appendChild(layerDiv);
+    });
+    
+    layersList.classList.remove('hidden');
+}
+
+function downloadLayer(stlPath, layerName) {
+    window.location.href = `${API_BASE}/api/download/${encodeURIComponent(stlPath)}`;
+}
+
+function downloadAllLayers() {
+    // Use stored data instead of parsing HTML
+    if (!currentStlPaths || currentStlPaths.length === 0) {
+        alert('No STL files available. Please generate STL files first.');
+        return;
+    }
+    
+    // Prepare layer info
+    const layerInfo = currentLayerInfo || currentStlPaths.map((path, index) => ({
+        name: `Layer_${index + 1}`,
+        index: index
+    }));
+    
+    // Download as ZIP
+    fetch(`${API_BASE}/api/download-layers`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            stl_paths: currentStlPaths,
+            layer_info: layerInfo
+        })
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.blob();
+        }
+        return response.json().then(err => {
+            throw new Error(err.error || 'Failed to download layers');
+        });
+    })
+    .then(blob => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'layers.zip';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    })
+    .catch(error => {
+        console.error('Error downloading layers:', error);
+        alert('Failed to download layers: ' + error.message);
+    });
+}
+
+// Event listener for download all layers button
+const downloadAllLayersBtn = document.getElementById('downloadAllLayersBtn');
+if (downloadAllLayersBtn) {
+    downloadAllLayersBtn.addEventListener('click', downloadAllLayers);
+}
+
+// G-code functionality
+let currentGcodePath = null;
+let currentGcodeSettings = null;
+
+// G-code DOM elements
+const generateGcodeBtn = document.getElementById('generateGcodeBtn');
+const downloadGcodeBtn = document.getElementById('downloadGcodeBtn');
+const gcodeSection = document.getElementById('gcodeSection');
+const gcodeLearnFile = document.getElementById('gcodeLearnFile');
+const learnGcodeBtn = document.getElementById('learnGcodeBtn');
+const viewSettingsBtn = document.getElementById('viewSettingsBtn');
+const gcodeSettingsModal = document.getElementById('gcodeSettingsModal');
+const gcodeSettingsForm = document.getElementById('gcodeSettingsForm');
+const saveGcodeSettingsBtn = document.getElementById('saveGcodeSettingsBtn');
+const cancelGcodeSettingsBtn = document.getElementById('cancelGcodeSettingsBtn');
+
+// Learn settings from G-code file
+function learnGcodeSettings() {
+    const file = gcodeLearnFile.files[0];
+    if (!file) {
+        alert('Please select a G-code file first');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('gcode_file', file);
+    
+    learnGcodeBtn.disabled = true;
+    learnGcodeBtn.textContent = 'Learning...';
+    
+    fetch(`${API_BASE}/api/gcode/learn`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error: ' + data.error);
+        } else {
+            alert('Settings learned successfully!');
+            currentGcodeSettings = data.settings;
+            gcodeLearnFile.value = ''; // Clear file input
+        }
+    })
+    .catch(error => {
+        console.error('Error learning G-code:', error);
+        alert('Failed to learn settings: ' + error.message);
+    })
+    .finally(() => {
+        learnGcodeBtn.disabled = false;
+        learnGcodeBtn.textContent = 'Learn Settings';
+    });
+}
+
+// Load current G-code settings
+function loadGcodeSettings() {
+    fetch(`${API_BASE}/api/gcode/settings`)
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            currentGcodeSettings = data.settings;
+        }
+    })
+    .catch(error => {
+        console.error('Error loading G-code settings:', error);
+    });
+}
+
+// View/edit G-code settings
+function viewGcodeSettings() {
+    if (!currentGcodeSettings) {
+        loadGcodeSettings().then(() => {
+            if (currentGcodeSettings) {
+                displayGcodeSettingsModal();
+            }
+        });
+    } else {
+        displayGcodeSettingsModal();
+    }
+}
+
+// Unit mapping for G-code parameters
+const gcodeUnits = {
+    'temperatures': {
+        'bed_temperature': '°C',
+        'first_layer_bed_temperature': '°C',
+        'extruder_temperature': '°C',
+        'first_layer_temperature': '°C'
+    },
+    'layer': {
+        'height': 'mm',
+        'first_height': 'mm'
+    },
+    'extrusion': {
+        'external_perimeter': 'mm',
+        'perimeter': 'mm',
+        'infill': 'mm',
+        'solid_infill': 'mm',
+        'top_infill': 'mm',
+        'first_layer': 'mm'
+    },
+    'speeds': {
+        'perimeter': 'mm/s',
+        'external_perimeter': 'mm/s',
+        'infill': 'mm/s',
+        'solid_infill': 'mm/s',
+        'top_solid_infill': 'mm/s',
+        'support_material': 'mm/s',
+        'travel': 'mm/s',
+        'first_layer': 'mm/s'
+    },
+    'retraction': {
+        'length': 'mm',
+        'lift': 'mm',
+        'speed': 'mm/s',
+        'deretract_speed': 'mm/s'
+    },
+    'infill': {
+        'pattern': '', // No unit for pattern (string)
+        'density': '%'
+    },
+    'printer': {
+        'nozzle_diameter': 'mm',
+        'bed_shape': '' // No unit for bed_shape (string)
+    }
+};
+
+function displayGcodeSettingsModal() {
+    gcodeSettingsForm.innerHTML = '';
+    
+    // Create form fields for settings
+    const categories = ['temperatures', 'layer', 'extrusion', 'speeds', 'retraction', 'infill', 'printer'];
+    
+    categories.forEach(category => {
+        if (currentGcodeSettings[category]) {
+            const categoryDiv = document.createElement('div');
+            categoryDiv.className = 'settings-category';
+            categoryDiv.innerHTML = `<h4>${category.charAt(0).toUpperCase() + category.slice(1)}</h4>`;
+            
+            Object.keys(currentGcodeSettings[category]).forEach(key => {
+                const value = currentGcodeSettings[category][key];
+                const inputGroup = document.createElement('div');
+                inputGroup.className = 'form-group';
+                
+                // Get unit for this parameter
+                const unit = (gcodeUnits[category] && gcodeUnits[category][key]) || '';
+                const unitDisplay = unit ? ` (${unit})` : '';
+                
+                const label = document.createElement('label');
+                label.textContent = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) + unitDisplay;
+                label.setAttribute('for', `gcode_${category}_${key}`);
+                
+                let input;
+                // Check if this is infill pattern - use dropdown
+                if (category === 'infill' && key === 'pattern') {
+                    input = document.createElement('select');
+                    input.id = `gcode_${category}_${key}`;
+                    input.className = 'gcode-setting-input';
+                    input.dataset.category = category;
+                    input.dataset.key = key;
+                    
+                    // Add infill pattern options
+                    const patterns = [
+                        { value: 'rectilinear', label: 'Rectilinear' },
+                        { value: 'grid', label: 'Grid' },
+                        { value: 'triangles', label: 'Triangles' },
+                        { value: 'honeycomb', label: 'Honeycomb' }
+                    ];
+                    
+                    patterns.forEach(pattern => {
+                        const option = document.createElement('option');
+                        option.value = pattern.value;
+                        option.textContent = pattern.label;
+                        if (pattern.value === value) {
+                            option.selected = true;
+                        }
+                        input.appendChild(option);
+                    });
+                } else if (typeof value === 'string' && (key === 'bed_shape')) {
+                    // Text input for bed_shape
+                    input = document.createElement('input');
+                    input.type = 'text';
+                    input.id = `gcode_${category}_${key}`;
+                    input.value = value;
+                    input.className = 'gcode-setting-input';
+                    input.dataset.category = category;
+                    input.dataset.key = key;
+                } else {
+                    // Number input for other values
+                    input = document.createElement('input');
+                    input.type = 'number';
+                    input.step = category === 'layer' || category === 'extrusion' || category === 'retraction' || (category === 'printer' && key === 'nozzle_diameter') ? '0.01' : '1';
+                    input.id = `gcode_${category}_${key}`;
+                    input.value = value;
+                    input.className = 'gcode-setting-input';
+                    input.dataset.category = category;
+                    input.dataset.key = key;
+                    
+                    // Add unit as placeholder or suffix if it's a number input
+                    if (unit) {
+                        input.placeholder = unit;
+                    }
+                }
+                
+                inputGroup.appendChild(label);
+                inputGroup.appendChild(input);
+                categoryDiv.appendChild(inputGroup);
+            });
+            
+            gcodeSettingsForm.appendChild(categoryDiv);
+        }
+    });
+    
+    gcodeSettingsModal.classList.remove('hidden');
+}
+
+function saveGcodeSettings() {
+    const settings = {};
+    
+    // Collect all input values
+    document.querySelectorAll('.gcode-setting-input').forEach(input => {
+        const category = input.dataset.category;
+        const key = input.dataset.key;
+        // Handle select dropdowns (for infill pattern) vs number/text inputs
+        let value;
+        if (input.tagName === 'SELECT') {
+            value = input.value; // String value for dropdowns
+        } else if (input.type === 'number') {
+            value = parseFloat(input.value) || 0;
+        } else {
+            value = input.value; // String value for text inputs
+        }
+        
+        if (!settings[category]) {
+            settings[category] = {};
+        }
+        settings[category][key] = value;
+    });
+    
+    fetch(`${API_BASE}/api/gcode/settings`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ settings: settings })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error: ' + data.error);
+        } else {
+            currentGcodeSettings = data.settings;
+            gcodeSettingsModal.classList.add('hidden');
+            alert('Settings saved successfully!');
+        }
+    })
+    .catch(error => {
+        console.error('Error saving G-code settings:', error);
+        alert('Failed to save settings: ' + error.message);
+    });
+}
+
+// Generate G-code from STL
+function generateGcode() {
+    if (!currentStlPath && !currentStlPaths) {
+        alert('No STL file available. Please generate an STL first.');
+        return;
+    }
+    
+    // Use first STL path if multiple layers, otherwise use single path
+    const stlPath = currentStlPaths && currentStlPaths.length > 0 ? currentStlPaths[0] : currentStlPath;
+    
+    if (!stlPath) {
+        alert('STL file path not found');
+        return;
+    }
+    
+    generateGcodeBtn.disabled = true;
+    generateGcodeBtn.textContent = 'Generating...';
+    
+    fetch(`${API_BASE}/api/gcode/generate`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            stl_path: stlPath,
+            job_id: currentJobId || Date.now().toString(),
+            settings: currentGcodeSettings
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error: ' + data.error);
+        } else {
+            currentGcodePath = data.gcode_filename;
+            downloadGcodeBtn.classList.remove('hidden');
+            alert('G-code generated successfully!');
+        }
+    })
+    .catch(error => {
+        console.error('Error generating G-code:', error);
+        alert('Failed to generate G-code: ' + error.message);
+    })
+    .finally(() => {
+        generateGcodeBtn.disabled = false;
+        generateGcodeBtn.textContent = '🖨️ Generate G-code';
+    });
+}
+
+// Download G-code file
+function downloadGcode() {
+    if (!currentGcodePath) {
+        alert('No G-code file available');
+        return;
+    }
+    
+    window.location.href = `${API_BASE}/api/gcode/download/${currentGcodePath}`;
+}
+
+// Event listeners for G-code
+if (learnGcodeBtn) {
+    learnGcodeBtn.addEventListener('click', learnGcodeSettings);
+}
+
+if (viewSettingsBtn) {
+    viewSettingsBtn.addEventListener('click', viewGcodeSettings);
+}
+
+if (saveGcodeSettingsBtn) {
+    saveGcodeSettingsBtn.addEventListener('click', saveGcodeSettings);
+}
+
+if (cancelGcodeSettingsBtn) {
+    cancelGcodeSettingsBtn.addEventListener('click', () => {
+        gcodeSettingsModal.classList.add('hidden');
+    });
+}
+
+if (generateGcodeBtn) {
+    generateGcodeBtn.addEventListener('click', generateGcode);
+}
+
+if (downloadGcodeBtn) {
+    downloadGcodeBtn.addEventListener('click', downloadGcode);
+}
+
+// Show G-code section and generate button when STL is ready
+function showGcodeControls() {
+    if (gcodeSection) {
+        gcodeSection.classList.remove('hidden');
+    }
+    if (generateGcodeBtn) {
+        generateGcodeBtn.classList.remove('hidden');
+    }
+}
+
+// Load G-code settings on page load
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', loadSavedModels);
+    document.addEventListener('DOMContentLoaded', () => {
+        loadSavedModels();
+        loadGcodeSettings();
+    });
 } else {
     loadSavedModels();
+    loadGcodeSettings();
 }

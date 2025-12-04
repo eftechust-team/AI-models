@@ -12,6 +12,10 @@ import time
 import requests
 import sys
 import json
+import zipfile
+from collections import defaultdict
+from gcode_parser import GCodeParser
+from gcode_generator import GCodeGenerator
 
 # Safe print function for Windows console encoding issues
 def safe_print(message):
@@ -31,11 +35,36 @@ STORAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'saved_mo
 MODELS_DB_FILE = os.path.join(STORAGE_DIR, 'models.json')
 PREVIEWS_DIR = os.path.join(STORAGE_DIR, 'previews')
 STL_DIR = os.path.join(STORAGE_DIR, 'stl_files')
+GCODE_DIR = os.path.join(STORAGE_DIR, 'gcode_files')
+GCODE_SETTINGS_FILE = os.path.join(STORAGE_DIR, 'gcode_settings.json')
 
 # Create storage directories if they don't exist
 os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(PREVIEWS_DIR, exist_ok=True)
 os.makedirs(STL_DIR, exist_ok=True)
+os.makedirs(GCODE_DIR, exist_ok=True)
+
+# G-code parser instance
+gcode_parser = GCodeParser()
+
+# Load learned G-code settings
+def load_gcode_settings():
+    """Load learned G-code settings from file"""
+    if os.path.exists(GCODE_SETTINGS_FILE):
+        try:
+            with open(GCODE_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return gcode_parser.get_default_settings()
+    return gcode_parser.get_default_settings()
+
+def save_gcode_settings(settings):
+    """Save learned G-code settings to file"""
+    with open(GCODE_SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(settings, f, indent=2, ensure_ascii=False)
+
+# Initialize with default or saved settings
+learned_gcode_settings = load_gcode_settings()
 
 def load_models_db():
     """Load the models database from JSON file"""
@@ -108,10 +137,15 @@ def delete_model(model_id):
     save_models_db(db)
     return True
 
-# Configuration - set these as environment variables if needed
-# Temporarily hardcoded for testing (set via environment variable in production)
-ARK_API_KEY = os.environ.get('ARK_API_KEY', '') or "d04343ef-c9c9-4c5f-bde1-8747eaf35f3f"
+# Configuration - set these as environment variables
+# DO NOT hardcode API keys in production - use environment variables for security
+ARK_API_KEY = os.environ.get('ARK_API_KEY', '')
 # Note: The secret access key is not needed for the OpenAI client approach
+
+# Volcano Engine (Doubao-Seedream) API credentials
+# Set these via environment variables: VOLCANO_ACCESS_KEY_ID and VOLCANO_SECRET_ACCESS_KEY
+VOLCANO_ACCESS_KEY_ID = os.environ.get('VOLCANO_ACCESS_KEY_ID', '')
+VOLCANO_SECRET_ACCESS_KEY = os.environ.get('VOLCANO_SECRET_ACCESS_KEY', '')
 
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 REPLICATE_API_TOKEN = os.environ.get('REPLICATE_API_TOKEN', '')
@@ -122,6 +156,11 @@ if ARK_API_KEY:
     safe_print(f"[INFO] Volcano Engine ARK API key found: {ARK_API_KEY[:15]}...")
 else:
     safe_print("[INFO] Volcano Engine ARK API key not found")
+
+if VOLCANO_ACCESS_KEY_ID:
+    safe_print(f"[INFO] Volcano Engine Access Key ID found: {VOLCANO_ACCESS_KEY_ID[:15]}...")
+if VOLCANO_SECRET_ACCESS_KEY:
+    safe_print(f"[INFO] Volcano Engine Secret Access Key found: {VOLCANO_SECRET_ACCESS_KEY[:15]}...")
 
 safe_print("[INFO] Will use Volcano Engine 图像生成大模型 (Doubao-Seedream) as primary service")
 
@@ -1066,6 +1105,146 @@ def image_to_contour(img, solid_infill=True):
             return [outer_contour] + verified_holes
         else:
             return outer_contour
+
+def detect_image_components(img, max_components=10):
+    """
+    Detect different components by separating black outline from white areas inside
+    Returns a list of images: one for the black outline, and one for each white area inside
+    
+    Args:
+        img: PIL Image (should be black shape on white background)
+        max_components: Maximum number of components to detect
+    
+    Returns:
+        List of (component_image, component_name) tuples
+    """
+    # Convert to numpy array
+    img_array = np.array(img.convert('RGB'))
+    
+    # Convert to grayscale
+    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    
+    # Threshold: black shape (0) on white background (255)
+    _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+    
+    # Check if image is inverted (white shape on black background)
+    mean_value = np.mean(binary)
+    is_inverted = mean_value < 127
+    
+    if is_inverted:
+        # Invert to get black shape on white background
+        binary = 255 - binary
+    
+    components = []
+    verified_holes = []  # Initialize to avoid scope issues
+    
+    # Step 1: Find the outer black contour (main shape)
+    # Invert binary to find black areas (findContours finds white areas)
+    black_mask = 255 - binary
+    
+    # Find external contours (outer shape only)
+    contours, hierarchy = cv2.findContours(black_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    
+    if not contours:
+        # No contours found, return original as single component
+        component_final = Image.fromarray(binary).convert('RGB')
+        components.append((component_final, "Layer_1"))
+        return components
+    
+    # Get the largest contour (main shape)
+    outer_contour = max(contours, key=cv2.contourArea)
+    
+    # Create mask for the outer black shape (filled)
+    outer_mask = np.zeros(binary.shape, dtype=np.uint8)
+    cv2.drawContours(outer_mask, [outer_contour], -1, 255, -1)  # Fill the contour
+    
+    # Step 2: Find white areas inside the black shape (holes/negative spaces)
+    # Create a mask that is white inside the black shape, black outside
+    # This is: white pixels that are inside the outer_mask
+    white_inside_mask = np.zeros(binary.shape, dtype=np.uint8)
+    # Set white_inside_mask to white where: binary is white (255) AND inside outer_mask
+    white_inside_mask[(binary == 255) & (outer_mask == 255)] = 255
+    
+    # Find ALL white contours inside (use RETR_TREE to get nested holes too)
+    white_contours, white_hierarchy = cv2.findContours(
+        white_inside_mask, 
+        cv2.RETR_TREE, 
+        cv2.CHAIN_APPROX_NONE
+    )
+    
+    if white_hierarchy is not None and len(white_contours) > 0:
+        # Filter and verify white areas (holes)
+        min_area = 100  # Minimum area for a hole to be considered
+        
+        for i, hole_contour in enumerate(white_contours):
+            area = cv2.contourArea(hole_contour)
+            if area < min_area:
+                continue
+            
+            # Get center point of hole
+            M = cv2.moments(hole_contour)
+            if M["m00"] == 0:
+                continue
+                
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            
+            # Verify: must be inside outer contour and actually white in original
+            if 0 <= cy < binary.shape[0] and 0 <= cx < binary.shape[1]:
+                if cv2.pointPolygonTest(outer_contour, (cx, cy), False) >= 0:
+                    if binary[cy, cx] == 255:  # White = hole
+                        # Check hierarchy: only add if it's a top-level hole (not nested inside another hole)
+                        # For RETR_TREE, parent is -1 for external contours
+                        if white_hierarchy[0][i][3] == -1:  # No parent = top-level hole
+                            verified_holes.append(hole_contour)
+        
+        # Sort by area (largest first) and limit
+        verified_holes.sort(key=cv2.contourArea, reverse=True)
+        verified_holes = verified_holes[:max_components - 1]  # -1 because we already have outline
+        
+        safe_print(f"Found {len(verified_holes)} white areas (holes) inside the black outline")
+        
+        # Step 3: Create a separate layer for each white area (hole)
+        for idx, hole in enumerate(verified_holes):
+            # Create mask for this specific hole
+            hole_mask = np.zeros(binary.shape, dtype=np.uint8)
+            cv2.drawContours(hole_mask, [hole], -1, 255, -1)  # Fill the hole
+            
+            # Create image with only this hole (black shape on white background)
+            # This represents the hole as a positive shape that can be printed
+            hole_img = np.ones_like(img_array) * 255  # White background
+            hole_img[hole_mask == 255] = [0, 0, 0]  # Black shape (the hole as a positive shape)
+            hole_final = Image.fromarray(hole_img).convert('RGB')
+            components.append((hole_final, f"WhiteArea_{idx + 1}"))
+    
+    # Step 4: Create layer for the black outline (main shape)
+    # The outline should be the black shape MINUS the white areas inside
+    # This creates a "frame" or "outline" layer
+    outline_img = np.ones_like(img_array) * 255  # White background
+    
+    # Draw the filled black shape
+    outline_img[outer_mask == 255] = [0, 0, 0]  # Black shape
+    
+    # Remove white areas from the outline (make them white again)
+    # This creates an outline with holes
+    if len(verified_holes) > 0:
+        # We have white areas, so remove them from the outline
+        for hole in verified_holes:
+            hole_mask = np.zeros(binary.shape, dtype=np.uint8)
+            cv2.drawContours(hole_mask, [hole], -1, 255, -1)
+            outline_img[hole_mask == 255] = [255, 255, 255]  # Make holes white again
+    
+    outline_final = Image.fromarray(outline_img).convert('RGB')
+    # Insert outline at the beginning
+    components.insert(0, (outline_final, "BlackOutline"))
+    
+    # If no holes found, at least return the outline
+    if len(components) == 1:
+        safe_print("No white areas (holes) detected inside the black outline")
+    
+    safe_print(f"Generated {len(components)} layers: 1 black outline + {len(components)-1} white areas")
+    
+    return components
 
 def extrude_2d_to_3d(contour, thickness, resolution=100, arc_top=False):
     """
@@ -2172,17 +2351,28 @@ def upload_image():
             img = process_uploaded_image(original_img)
         
         # Process to STL
-        result = process_shape_from_image(img, thickness, job_id, solid_infill=solid_infill, arc_top=arc_top)
+        multi_layer = data.get('multi_layer', False)
+        result = process_shape_from_image(img, thickness, job_id, solid_infill=solid_infill, arc_top=arc_top, multi_layer=multi_layer)
         
         # Update progress to 100% for consistency
         update_progress(job_id, 100, "")
         
         if result['success']:
-            return jsonify({
+            response_data = {
                 'job_id': job_id,
-                'preview_image': result['preview_image'],
-                'stl_path': result['stl_path']
-            })
+                'preview_image': result['preview_image']
+            }
+            if 'stl_paths' in result:
+                # Multi-layer mode
+                response_data['stl_paths'] = result['stl_paths']
+                response_data['layer_info'] = result['layer_info']
+                response_data['num_layers'] = result['num_layers']
+                response_data['multi_layer'] = True
+            else:
+                # Single STL mode
+                response_data['stl_path'] = result['stl_path']
+                response_data['multi_layer'] = False
+            return jsonify(response_data)
         else:
             return jsonify({'error': result['error']}), 500
     except Exception as e:
@@ -2221,17 +2411,28 @@ def reverse_image():
         inverted_img = Image.fromarray(inverted_array)
         
         # Process to STL
-        result = process_shape_from_image(inverted_img, thickness, job_id, solid_infill=solid_infill, arc_top=arc_top)
+        multi_layer = data.get('multi_layer', False)
+        result = process_shape_from_image(inverted_img, thickness, job_id, solid_infill=solid_infill, arc_top=arc_top, multi_layer=multi_layer)
         
         # Update progress to 100% for consistency
         update_progress(job_id, 100, "")
         
         if result['success']:
-            return jsonify({
+            response_data = {
                 'job_id': job_id,
-                'preview_image': result['preview_image'],
-                'stl_path': result['stl_path']
-            })
+                'preview_image': result['preview_image']
+            }
+            if 'stl_paths' in result:
+                # Multi-layer mode
+                response_data['stl_paths'] = result['stl_paths']
+                response_data['layer_info'] = result['layer_info']
+                response_data['num_layers'] = result['num_layers']
+                response_data['multi_layer'] = True
+            else:
+                # Single STL mode
+                response_data['stl_path'] = result['stl_path']
+                response_data['multi_layer'] = False
+            return jsonify(response_data)
         else:
             return jsonify({'error': result['error']}), 500
     except Exception as e:
@@ -2262,14 +2463,25 @@ def generate_stl():
         img = img.convert('RGB')
         
         # Process to STL
-        result = process_shape_from_image(img, thickness, job_id, solid_infill=solid_infill, arc_top=arc_top)
+        multi_layer = data.get('multi_layer', False)
+        result = process_shape_from_image(img, thickness, job_id, solid_infill=solid_infill, arc_top=arc_top, multi_layer=multi_layer)
         
         if result['success']:
-            return jsonify({
+            response_data = {
                 'job_id': job_id,
-                'preview_image': result['preview_image'],
-                'stl_path': result['stl_path']
-            })
+                'preview_image': result['preview_image']
+            }
+            if 'stl_paths' in result:
+                # Multi-layer mode
+                response_data['stl_paths'] = result['stl_paths']
+                response_data['layer_info'] = result['layer_info']
+                response_data['num_layers'] = result['num_layers']
+                response_data['multi_layer'] = True
+            else:
+                # Single STL mode
+                response_data['stl_path'] = result['stl_path']
+                response_data['multi_layer'] = False
+            return jsonify(response_data)
         else:
             return jsonify({'error': result['error']}), 500
     except Exception as e:
@@ -2595,34 +2807,108 @@ def process_uploaded_image(img):
     
     return Image.fromarray(img_rgb)
 
-def process_shape_from_image(img_2d, thickness, job_id, solid_infill=True, arc_top=False):
-    """Process STL generation from an existing image"""
+def process_shape_from_image(img_2d, thickness, job_id, solid_infill=True, arc_top=False, multi_layer=False):
+    """Process STL generation from an existing image
+    
+    Args:
+        img_2d: PIL Image
+        thickness: Thickness in mm
+        job_id: Job ID for progress tracking
+        solid_infill: Whether to fill holes
+        arc_top: Whether to use arc top
+        multi_layer: If True, generate multiple STL files (one per component/layer)
+    
+    Returns:
+        dict with 'success', 'stl_path' or 'stl_paths' (list), 'preview_image', 'layer_info'
+    """
     try:
-        # Extract contour(s) - may be single contour or list of contours
-        contour = image_to_contour(img_2d, solid_infill=solid_infill)
-        if contour is None:
-            raise ValueError("Could not extract contour from image")
-        
-        # Use exact thickness as specified by user (in mm)
-        # Extrude to 3D (handles both single contour and list of contours)
-        mesh_3d = extrude_2d_to_3d(contour, thickness, arc_top=arc_top)
-        
-        # Save to temporary file
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
-        mesh_3d.save(temp_file.name)
-        
-        # Save 2D image preview
-        img_buffer = io.BytesIO()
-        img_2d.save(img_buffer, format='PNG')
-        img_base64 = base64.b64encode(img_buffer.getvalue()).decode()
-        
-        update_progress(job_id, 100, "")
-        
-        return {
-            'success': True,
-            'stl_path': temp_file.name,
-            'preview_image': img_base64
-        }
+        if multi_layer:
+            # Multi-layer mode: detect components and generate separate STL for each
+            update_progress(job_id, 20, "Analyzing image components...")
+            components = detect_image_components(img_2d, max_components=10)
+            
+            if not components:
+                raise ValueError("Could not detect components in image")
+            
+            safe_print(f"Detected {len(components)} components/layers")
+            update_progress(job_id, 30, f"Generating {len(components)} STL layers...")
+            
+            stl_paths = []
+            layer_info = []
+            
+            for idx, (component_img, layer_name) in enumerate(components):
+                try:
+                    # Extract contour for this component
+                    contour = image_to_contour(component_img, solid_infill=solid_infill)
+                    if contour is None:
+                        safe_print(f"Warning: Could not extract contour for {layer_name}, skipping")
+                        continue
+                    
+                    # Extrude to 3D
+                    mesh_3d = extrude_2d_to_3d(contour, thickness, arc_top=arc_top)
+                    
+                    # Save to temporary file
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
+                    mesh_3d.save(temp_file.name)
+                    
+                    stl_paths.append(temp_file.name)
+                    layer_info.append({
+                        'name': layer_name,
+                        'stl_path': temp_file.name,
+                        'index': idx
+                    })
+                    
+                    progress = 30 + int((idx + 1) / len(components) * 60)
+                    update_progress(job_id, progress, f"Generated layer {idx+1}/{len(components)}")
+                    
+                except Exception as e:
+                    safe_print(f"Error processing layer {layer_name}: {str(e)}")
+                    continue
+            
+            if not stl_paths:
+                raise ValueError("Could not generate any STL layers")
+            
+            # Save 2D image preview (original image)
+            img_buffer = io.BytesIO()
+            img_2d.save(img_buffer, format='PNG')
+            img_base64 = base64.b64encode(img_buffer.getvalue()).decode()
+            
+            update_progress(job_id, 100, f"Generated {len(stl_paths)} layers successfully")
+            
+            return {
+                'success': True,
+                'stl_paths': stl_paths,
+                'layer_info': layer_info,
+                'preview_image': img_base64,
+                'num_layers': len(stl_paths)
+            }
+        else:
+            # Single STL mode (original behavior)
+            # Extract contour(s) - may be single contour or list of contours
+            contour = image_to_contour(img_2d, solid_infill=solid_infill)
+            if contour is None:
+                raise ValueError("Could not extract contour from image")
+            
+            # Use exact thickness as specified by user (in mm)
+            # Extrude to 3D (handles both single contour and list of contours)
+            mesh_3d = extrude_2d_to_3d(contour, thickness, arc_top=arc_top)
+            
+            # Save to temporary file
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
+            mesh_3d.save(temp_file.name)
+            
+            # Save 2D image preview
+            img_buffer = io.BytesIO()
+            img_2d.save(img_buffer, format='PNG')
+            img_base64 = base64.b64encode(img_buffer.getvalue()).decode()
+            
+            update_progress(job_id, 100, "")
+            
+            return {
+                'success': True,
+                'stl_path': temp_file.name,
+                'preview_image': img_base64
+            }
     except Exception as e:
         update_progress(job_id, 0, f"Error: {str(e)}")
         return {
@@ -2641,6 +2927,51 @@ def download_stl(filename):
     if os.path.exists(filename):
         return send_file(filename, as_attachment=True, download_name='shape.stl')
     return jsonify({'error': 'File not found'}), 404
+
+@app.route('/api/download-layers', methods=['POST'])
+def download_layers_zip():
+    """Download multiple STL files as a zip archive"""
+    try:
+        data = request.json
+        stl_paths = data.get('stl_paths', [])
+        layer_info = data.get('layer_info', [])
+        
+        if not stl_paths:
+            return jsonify({'error': 'No STL files provided'}), 400
+        
+        # Verify all files exist
+        missing_files = []
+        for stl_path in stl_paths:
+            if not os.path.exists(stl_path):
+                missing_files.append(stl_path)
+        
+        if missing_files:
+            safe_print(f"[ERROR] Missing STL files: {missing_files}")
+            return jsonify({'error': f'STL file path not available. Missing files: {len(missing_files)}'}), 404
+        
+        # Create a temporary zip file
+        zip_file = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+        
+        with zipfile.ZipFile(zip_file.name, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for i, stl_path in enumerate(stl_paths):
+                # Get layer name from layer_info if available
+                layer_name = f"Layer_{i+1}"
+                if layer_info and i < len(layer_info):
+                    layer_name = layer_info[i].get('name', layer_name)
+                
+                # Clean layer name for filename (remove invalid characters)
+                safe_layer_name = "".join(c for c in layer_name if c.isalnum() or c in ('_', '-', ' '))
+                safe_layer_name = safe_layer_name.replace(' ', '_')
+                
+                # Add file to zip with a clean name
+                zipf.write(stl_path, f"{safe_layer_name}.stl")
+        
+        return send_file(zip_file.name, as_attachment=True, download_name='layers.zip', mimetype='application/zip')
+    except Exception as e:
+        safe_print(f"[ERROR] Download layers zip failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 # Storage API endpoints
 @app.route('/api/models/save', methods=['POST'])
@@ -2775,6 +3106,119 @@ def test_ai():
         result['error'] = str(e)
     
     return jsonify(result)
+
+@app.route('/api/gcode/learn', methods=['POST'])
+def learn_gcode():
+    """Learn printer and printing settings from uploaded G-code file"""
+    try:
+        if 'gcode_file' not in request.files:
+            return jsonify({'error': 'No G-code file provided'}), 400
+        
+        gcode_file = request.files['gcode_file']
+        if gcode_file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Read G-code content
+        gcode_content = gcode_file.read().decode('utf-8')
+        
+        # Parse settings
+        parsed_settings = gcode_parser.parse_gcode_file(gcode_content)
+        
+        # Merge with existing settings (new settings take precedence)
+        global learned_gcode_settings
+        learned_gcode_settings = gcode_parser.merge_settings(learned_gcode_settings, parsed_settings)
+        
+        # Save to file
+        save_gcode_settings(learned_gcode_settings)
+        
+        safe_print(f"[SUCCESS] Learned settings from G-code file: {gcode_file.filename}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Settings learned successfully',
+            'settings': learned_gcode_settings
+        })
+    except Exception as e:
+        safe_print(f"[ERROR] Learn G-code failed: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/gcode/settings', methods=['GET'])
+def get_gcode_settings():
+    """Get current G-code settings"""
+    global learned_gcode_settings
+    return jsonify({
+        'success': True,
+        'settings': learned_gcode_settings
+    })
+
+@app.route('/api/gcode/settings', methods=['POST'])
+def update_gcode_settings():
+    """Update G-code settings"""
+    try:
+        data = request.json
+        if 'settings' not in data:
+            return jsonify({'error': 'Settings not provided'}), 400
+        
+        global learned_gcode_settings
+        learned_gcode_settings = gcode_parser.merge_settings(learned_gcode_settings, data['settings'])
+        save_gcode_settings(learned_gcode_settings)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Settings updated successfully',
+            'settings': learned_gcode_settings
+        })
+    except Exception as e:
+        safe_print(f"[ERROR] Update G-code settings failed: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/gcode/generate', methods=['POST'])
+def generate_gcode():
+    """Generate G-code from STL file"""
+    try:
+        data = request.json
+        stl_path = data.get('stl_path')
+        job_id = data.get('job_id')
+        
+        if not stl_path or not os.path.exists(stl_path):
+            return jsonify({'error': 'STL file not found'}), 400
+        
+        # Get settings (use provided settings or learned settings)
+        settings = data.get('settings', learned_gcode_settings)
+        
+        # Generate G-code
+        generator = GCodeGenerator(settings)
+        gcode_content = generator.generate_from_stl(stl_path)
+        
+        # Save G-code file
+        gcode_filename = f"{job_id}.gcode"
+        gcode_path = os.path.join(GCODE_DIR, gcode_filename)
+        with open(gcode_path, 'w', encoding='utf-8') as f:
+            f.write(gcode_content)
+        
+        safe_print(f"[SUCCESS] Generated G-code: {gcode_filename}")
+        
+        return jsonify({
+            'success': True,
+            'gcode_path': gcode_path,
+            'gcode_filename': gcode_filename
+        })
+    except Exception as e:
+        safe_print(f"[ERROR] Generate G-code failed: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/gcode/download/<filename>')
+def download_gcode(filename):
+    """Download generated G-code file"""
+    try:
+        gcode_path = os.path.join(GCODE_DIR, filename)
+        if not os.path.exists(gcode_path):
+            return jsonify({'error': 'G-code file not found'}), 404
+        
+        return send_file(gcode_path, as_attachment=True, download_name=filename)
+    except Exception as e:
+        safe_print(f"[ERROR] Download G-code failed: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # Run on all network interfaces (0.0.0.0) to make it accessible from other devices
