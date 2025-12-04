@@ -2,7 +2,120 @@ from flask import Flask, render_template, request, jsonify, send_file, Response,
 from flask_cors import CORS
 import os
 import numpy as np
-import cv2
+
+# Try to import OpenCV, but make it optional for Vercel compatibility
+try:
+    import cv2
+    HAS_OPENCV = True
+except ImportError:
+    HAS_OPENCV = False
+    # Create a dummy cv2 module for basic compatibility
+    class DummyCV2:
+        COLOR_RGB2GRAY = None
+        COLOR_RGB2HSV = None
+        COLOR_RGB2LAB = None
+        THRESH_BINARY = 0
+        THRESH_OTSU = 8
+        RETR_EXTERNAL = 0
+        RETR_TREE = 3
+        CHAIN_APPROX_NONE = 2
+        TERM_CRITERIA_EPS = 1
+        TERM_CRITERIA_MAX_ITER = 2
+        KMEANS_RANDOM_CENTERS = 0
+        CC_STAT_AREA = 4
+        
+        @staticmethod
+        def cvtColor(img, code):
+            if code == DummyCV2.COLOR_RGB2GRAY:
+                # Simple grayscale conversion using numpy
+                if len(img.shape) == 3:
+                    return np.dot(img[...,:3], [0.2989, 0.5870, 0.1140]).astype(np.uint8)
+                return img
+            return img
+        
+        @staticmethod
+        def threshold(img, thresh, maxval, type):
+            if type & DummyCV2.THRESH_OTSU:
+                # Simple Otsu-like threshold
+                threshold_value = np.mean(img)
+            else:
+                threshold_value = thresh
+            binary = (img > threshold_value).astype(np.uint8) * maxval
+            return threshold_value, binary
+        
+        @staticmethod
+        def findContours(img, mode, method):
+            # Use scikit-image for contour finding (more compatible than OpenCV)
+            try:
+                from skimage import measure
+                # Convert binary image to boolean
+                binary_bool = img > 127
+                # Find contours
+                contours_data = measure.find_contours(binary_bool, 0.5)
+                # Convert to OpenCV-like format
+                contours = []
+                for contour in contours_data:
+                    # Convert to integer coordinates
+                    contour_int = np.round(contour).astype(np.int32)
+                    # Reshape to match OpenCV format: (N, 1, 2)
+                    contour_cv = contour_int.reshape(-1, 1, 2)
+                    contours.append(contour_cv)
+                hierarchy = None  # scikit-image doesn't provide hierarchy
+                return contours, hierarchy
+            except ImportError:
+                # Fallback: return empty
+                return [], None
+        
+        @staticmethod
+        def contourArea(contour):
+            if len(contour) < 3:
+                return 0
+            # Shoelace formula
+            x = contour[:, 0, 0] if len(contour.shape) > 2 else contour[:, 0]
+            y = contour[:, 0, 1] if len(contour.shape) > 2 else contour[:, 1]
+            return 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+        
+        @staticmethod
+        def drawContours(img, contours, idx, color, thickness):
+            return img
+        
+        @staticmethod
+        def connectedComponentsWithStats(img, connectivity=8):
+            # Basic connected components using scipy
+            try:
+                from scipy import ndimage
+                labeled, num = ndimage.label(img > 127)
+                stats = []
+                centroids = []
+                for i in range(1, num + 1):
+                    mask = labeled == i
+                    stats.append([np.sum(mask), 0, 0, 0, 0])  # area, left, top, width, height
+                    centroids.append([np.mean(np.where(mask)[1]), np.mean(np.where(mask)[0])])
+                return num, labeled, np.array(stats), np.array(centroids)
+            except ImportError:
+                return 1, np.zeros_like(img), np.array([[0, 0, 0, 0, 0]]), np.array([[0, 0]])
+        
+        @staticmethod
+        def kmeans(data, k, best_labels, criteria, attempts, flags):
+            # Simple k-means using sklearn or manual
+            try:
+                from sklearn.cluster import KMeans
+                kmeans = KMeans(n_clusters=k, random_state=0, n_init=10)
+                labels = kmeans.fit_predict(data)
+                centers = kmeans.cluster_centers_
+                return None, labels, centers
+            except ImportError:
+                # Fallback: random centers
+                centers = data[np.random.choice(len(data), k, replace=False)]
+                labels = np.argmin(np.linalg.norm(data[:, None] - centers, axis=2), axis=1)
+                return None, labels, centers
+        
+        @staticmethod
+        def bitwise_not(img):
+            return 255 - img
+    
+    cv2 = DummyCV2()
+
 from PIL import Image, ImageDraw, ImageFont
 import io
 import base64
