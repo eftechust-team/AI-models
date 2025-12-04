@@ -1,0 +1,11 @@
+# Minimal requirements for Vercel - only essential packages
+# These should install without issues on Vercel
+Flask>=3.0.0
+flask-cors>=4.0.0
+numpy>=1.24.0,<2.0.0
+Pillow>=10.0.0
+numpy-stl>=3.0.0
+requests>=2.31.0
+replicate>=0.25.0
+openai>=1.0.0
+

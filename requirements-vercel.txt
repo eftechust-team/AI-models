@@ -1,0 +1,12 @@
+# Minimal requirements for Vercel deployment
+# If opencv-python-headless fails, try installing without it and use PIL-only fallback
+Flask>=3.0.0
+flask-cors>=4.0.0
+numpy>=1.24.0,<2.0.0
+Pillow>=10.0.0
+numpy-stl>=3.0.0
+requests>=2.31.0
+replicate>=0.25.0
+openai>=1.0.0
+# Try opencv-python-headless separately if needed
+# opencv-python-headless>=4.8.0,<5.0.0
