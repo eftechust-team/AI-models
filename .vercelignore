@@ -1,20 +1,83 @@
-saved_models/
+# Exclude large directories and files from Vercel deployment
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-.venv/
-venv/
 env/
+venv/
 ENV/
-*.log
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Exclude ALL test files
 test_*.py
+*_test.py
+*test*.py
+diagnose_*.py
+check_*.py
+find_*.py
+fix_*.py
+
+# Exclude documentation (keep only README if needed)
 *.md
 !README.md
-!VERCEL_DEPLOY.md
+
+# Exclude saved models and generated files
+saved_models/
+*.stl
+*.gcode
+*.db
+*.sqlite
+*.sqlite3
+
+# Exclude large data files
+*.json
+!package.json
+!package-lock.json
+!vercel.json
+
+# Exclude IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Exclude environment files
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.crt
+
+# Exclude setup scripts
+setup_*.bat
+setup_*.sh
+*.bat
+*.sh
+
+# Exclude requirements.txt (use requirements-vercel-minimal.txt instead)
+requirements.txt
+
+# Exclude static assets that aren't needed in serverless function
+# (These should be served separately if needed)
+static/previews/
+static/uploads/
+
+# Exclude any large binary files
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+

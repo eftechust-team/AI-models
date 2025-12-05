@@ -1,0 +1,4 @@
+# Ultra-minimal requirements - use only if standard minimal still exceeds 250MB
+# This removes flask-cors (you can handle CORS manually if needed)
+Flask>=3.0.0
+

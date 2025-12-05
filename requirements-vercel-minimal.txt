@@ -1,9 +1,6 @@
 # Minimal requirements for Vercel - only essential packages
-# These packages are smaller and should keep the function under 250MB
+# Note: Pillow removed to reduce size (~50MB), add back if image processing needed
 Flask>=3.0.0
 flask-cors>=4.0.0
-Pillow>=10.0.0
 requests>=2.31.0
-replicate>=0.25.0
-openai>=1.0.0
 
